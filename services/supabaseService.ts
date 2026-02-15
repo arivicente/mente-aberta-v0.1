@@ -1,34 +1,62 @@
 
-import { createClient } from '@supabase/supabase-js';
+import { createClient, User } from '@supabase/supabase-js';
 import { Message, SpecialistId } from '../types';
 
-// Credenciais fornecidas pelo usuário
 const supabaseUrl = 'https://cubacjyrehzrewxlxnff.supabase.co';
 const supabaseAnonKey = 'sb_publishable_hLLzPeM0LMbz31vyT_n3hg_XfDRbFzb';
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-export const getGuestId = () => {
-  let guestId = localStorage.getItem('mente_aberta_guest_id');
-  if (!guestId) {
-    guestId = crypto.randomUUID();
-    localStorage.setItem('mente_aberta_guest_id', guestId);
+// Funções de Autenticação
+export const signInWithGoogle = async () => {
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: 'google',
+    options: {
+      redirectTo: window.location.origin
+    }
+  });
+  if (error) {
+    console.error('Erro ao logar com Google:', error.message);
+    alert(`Erro: Provedor Google não está ativo no Supabase. Vá em Authentication -> Providers e ative o Google.`);
   }
-  return guestId;
 };
 
-export const fetchMessages = async (specialistId: SpecialistId): Promise<Message[]> => {
-  const guestId = getGuestId();
-  
+export const signInAnonymously = async () => {
+  const { data, error } = await supabase.auth.signInAnonymously();
+  if (error) {
+    console.error('Erro no login anônimo:', error.message);
+    // Não damos alert aqui para permitir o fallback silencioso ou via UI no App.tsx
+  }
+  return { data, error };
+};
+
+export const signOut = async () => {
+  const { error } = await supabase.auth.signOut();
+  localStorage.removeItem('mente_aberta_mock_user');
+  if (error) console.error('Erro ao deslogar:', error.message);
+};
+
+// Gerenciamento de ID Local (Fallback para quando Auth está desativado)
+export const getLocalGuestId = (): string => {
+  let id = localStorage.getItem('mente_aberta_mock_user');
+  if (!id) {
+    id = `local_${crypto.randomUUID()}`;
+    localStorage.setItem('mente_aberta_mock_user', id);
+  }
+  return id;
+};
+
+// Lógica de Mensagens vinculada ao Usuário (aceita userId de Auth ou Local)
+export const fetchMessages = async (specialistId: SpecialistId, userId: string): Promise<Message[]> => {
   const { data, error } = await supabase
     .from('messages')
     .select('*')
-    .eq('guest_id', guestId)
+    .eq('guest_id', userId)
     .eq('specialist_id', specialistId)
     .order('created_at', { ascending: true });
 
   if (error) {
-    console.error('Erro ao buscar mensagens do Supabase:', error);
+    console.error('Erro ao buscar mensagens:', error);
     return [];
   }
 
@@ -40,30 +68,27 @@ export const fetchMessages = async (specialistId: SpecialistId): Promise<Message
   }));
 };
 
-export const saveMessage = async (specialistId: SpecialistId, message: Message) => {
-  const guestId = getGuestId();
-  
+export const saveMessage = async (specialistId: SpecialistId, message: Message, userId: string) => {
   const { error } = await supabase
     .from('messages')
     .insert([{
       id: message.id,
-      guest_id: guestId,
+      guest_id: userId,
       specialist_id: specialistId,
       role: message.role,
       content: message.content,
       created_at: new Date(message.timestamp).toISOString()
     }]);
 
-  if (error) console.error('Erro ao salvar mensagem no Supabase:', error);
+  if (error) console.error('Erro ao salvar mensagem no banco:', error);
 };
 
-export const clearMessages = async (specialistId: SpecialistId) => {
-  const guestId = getGuestId();
+export const clearMessages = async (specialistId: SpecialistId, userId: string) => {
   const { error } = await supabase
     .from('messages')
     .delete()
-    .eq('guest_id', guestId)
+    .eq('guest_id', userId)
     .eq('specialist_id', specialistId);
   
-  if (error) console.error('Erro ao limpar mensagens no Supabase:', error);
+  if (error) console.error('Erro ao limpar histórico:', error);
 };

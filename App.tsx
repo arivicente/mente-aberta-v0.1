@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from '@google/genai';
+import { User } from '@supabase/supabase-js';
 import { SPECIALISTS, DISCLAIMER } from './constants';
 import { Specialist, Message } from './types';
 import { ChatMessage } from './components/ChatMessage';
@@ -9,11 +10,13 @@ import * as db from './services/supabaseService';
 import { decode, decodeAudioData, createBlob } from './services/liveService';
 
 const App: React.FC = () => {
+  const [user, setUser] = useState<User | { id: string; email?: string; is_local?: boolean } | null>(null);
   const [selectedSpecialist, setSelectedSpecialist] = useState<Specialist>(SPECIALISTS[0]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isHistoryLoading, setIsHistoryLoading] = useState(true);
+  const [isAuthChecking, setIsAuthChecking] = useState(true);
   
   // Voice/Live States
   const [isVoiceMode, setIsVoiceMode] = useState(false);
@@ -33,23 +36,52 @@ const App: React.FC = () => {
   const userTranscriptionRef = useRef('');
   const modelTranscriptionRef = useRef('');
 
+  // Monitorar Autenticação
+  useEffect(() => {
+    const localUserId = localStorage.getItem('mente_aberta_mock_user');
+    if (localUserId) {
+      setUser({ id: localUserId, is_local: true });
+      setIsAuthChecking(false);
+      return;
+    }
+
+    db.supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session) setUser(session.user);
+      setIsAuthChecking(false);
+    });
+
+    const { data: { subscription } } = db.supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) setUser(session.user);
+      else if (!localStorage.getItem('mente_aberta_mock_user')) setUser(null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
   // Carregar histórico
   useEffect(() => {
+    if (!user) return;
+
     const loadHistory = async () => {
       setIsHistoryLoading(true);
-      const history = await db.fetchMessages(selectedSpecialist.id);
-      if (history.length === 0) {
-        const firstMsg: Message = { id: crypto.randomUUID(), role: 'model', content: selectedSpecialist.firstMessage, timestamp: Date.now() };
-        setMessages([firstMsg]);
-        await db.saveMessage(selectedSpecialist.id, firstMsg);
-      } else {
-        setMessages(history);
+      try {
+        const history = await db.fetchMessages(selectedSpecialist.id, user.id);
+        if (history.length === 0) {
+          const firstMsg: Message = { id: crypto.randomUUID(), role: 'model', content: selectedSpecialist.firstMessage, timestamp: Date.now() };
+          setMessages([firstMsg]);
+          await db.saveMessage(selectedSpecialist.id, firstMsg, user.id);
+        } else {
+          setMessages(history);
+        }
+      } catch (err) {
+        console.error("Erro ao carregar banco:", err);
+      } finally {
+        setIsHistoryLoading(false);
       }
-      setIsHistoryLoading(false);
     };
     loadHistory();
     if (isVoiceMode) toggleVoiceMode();
-  }, [selectedSpecialist]);
+  }, [selectedSpecialist, user]);
 
   // Scroll Automático
   useEffect(() => {
@@ -70,6 +102,29 @@ const App: React.FC = () => {
     }
     return () => { if (timerIntervalRef.current) clearInterval(timerIntervalRef.current); };
   }, [isPressing]);
+
+  const handleClearChat = async () => {
+    if (!user || !confirm("Deseja apagar todo o histórico deste especialista?")) return;
+    setIsHistoryLoading(true);
+    await db.clearMessages(selectedSpecialist.id, user.id);
+    const firstMsg: Message = { id: crypto.randomUUID(), role: 'model', content: selectedSpecialist.firstMessage, timestamp: Date.now() };
+    setMessages([firstMsg]);
+    await db.saveMessage(selectedSpecialist.id, firstMsg, user.id);
+    setIsHistoryLoading(false);
+  };
+
+  const handleLocalLogin = () => {
+    const id = db.getLocalGuestId();
+    setUser({ id, is_local: true });
+  };
+
+  const handleAnonLogin = async () => {
+    const { error } = await db.signInAnonymously();
+    if (error) {
+      console.warn("Auth Anônimo no servidor falhou (desativado no painel). Usando persistência local.");
+      handleLocalLogin();
+    }
+  };
 
   const toggleVoiceMode = async () => {
     if (isVoiceMode) {
@@ -138,17 +193,17 @@ const App: React.FC = () => {
             if (message.serverContent?.turnComplete) {
               const uText = userTranscriptionRef.current;
               const mText = modelTranscriptionRef.current;
-              if (uText || mText) {
+              if (user && (uText || mText)) {
                 const msgsToAdd: Message[] = [];
                 if (uText) {
                   const m: Message = { id: crypto.randomUUID(), role: 'user', content: uText, timestamp: Date.now() };
                   msgsToAdd.push(m);
-                  db.saveMessage(selectedSpecialist.id, m);
+                  db.saveMessage(selectedSpecialist.id, m, user.id);
                 }
                 if (mText) {
                   const m: Message = { id: crypto.randomUUID(), role: 'model', content: mText, timestamp: Date.now() };
                   msgsToAdd.push(m);
-                  db.saveMessage(selectedSpecialist.id, m);
+                  db.saveMessage(selectedSpecialist.id, m, user.id);
                 }
                 setMessages(prev => [...prev, ...msgsToAdd]);
               }
@@ -201,11 +256,11 @@ const App: React.FC = () => {
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!inputText.trim() || isLoading) return;
+    if (!inputText.trim() || isLoading || !user) return;
 
     const userMsg: Message = { id: crypto.randomUUID(), role: 'user', content: inputText, timestamp: Date.now() };
     setMessages(prev => [...prev, userMsg]);
-    await db.saveMessage(selectedSpecialist.id, userMsg);
+    await db.saveMessage(selectedSpecialist.id, userMsg, user.id);
     
     setInputText('');
     setIsLoading(true);
@@ -213,7 +268,7 @@ const App: React.FC = () => {
     const aiResponseText = await getAIResponse(selectedSpecialist, messages, inputText);
     const modelMsg: Message = { id: crypto.randomUUID(), role: 'model', content: aiResponseText, timestamp: Date.now() };
     setMessages(prev => [...prev, modelMsg]);
-    await db.saveMessage(selectedSpecialist.id, modelMsg);
+    await db.saveMessage(selectedSpecialist.id, modelMsg, user.id);
     setIsLoading(false);
   };
 
@@ -223,9 +278,64 @@ const App: React.FC = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
+  if (isAuthChecking) {
+    return (
+      <div className="h-screen w-screen flex items-center justify-center bg-[#f0f2f5]">
+        <div className="w-10 h-10 border-4 border-[#075E54] border-t-transparent rounded-full animate-spin"></div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center bg-gradient-to-br from-[#075E54] to-[#128C7E] p-6">
+        <div className="bg-white p-8 rounded-[2.5rem] shadow-2xl w-full max-w-md text-center">
+          <div className="w-20 h-20 bg-[#DCF8C6] rounded-full flex items-center justify-center mx-auto mb-6 shadow-inner">
+            <svg className="w-10 h-10 text-[#075E54]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+            </svg>
+          </div>
+          <h1 className="text-2xl font-black text-gray-800 mb-2">Mente Aberta</h1>
+          <p className="text-gray-500 text-sm mb-8 leading-relaxed">
+            Sua jornada de autoconhecimento começa aqui. Converse com especialistas virtuais em um ambiente seguro e gratuito.
+          </p>
+          
+          <div className="space-y-4">
+            <button 
+              onClick={handleAnonLogin}
+              className="w-full py-4 rounded-2xl font-bold text-white bg-[#075E54] hover:bg-[#064e46] transition-all shadow-md active:scale-95 text-lg"
+            >
+              Começar Agora (Modo Grátis)
+            </button>
+
+            <div className="flex items-center gap-2 py-1">
+              <div className="flex-grow h-[1px] bg-gray-100"></div>
+              <span className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Sincronizar com Google</span>
+              <div className="flex-grow h-[1px] bg-gray-100"></div>
+            </div>
+
+            <button 
+              onClick={db.signInWithGoogle}
+              className="w-full flex items-center justify-center gap-3 bg-white border border-gray-200 py-3 rounded-xl font-semibold text-gray-600 hover:bg-gray-50 transition-all active:scale-95 text-sm"
+            >
+              <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" className="w-4 h-4" alt="Google" />
+              Entrar com Google
+            </button>
+            
+            <p className="text-[10px] text-gray-400 mt-2">
+              * O login com Google é opcional e gratuito. <br/>
+              Ele serve para você acessar suas conversas em outros aparelhos.
+            </p>
+          </div>
+
+          <p className="mt-8 text-[10px] text-gray-400 uppercase font-bold tracking-widest">{DISCLAIMER}</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen chat-bg overflow-hidden">
-      {/* Header WhatsApp */}
       <header className="bg-[#075E54] px-4 py-3 flex items-center justify-between shadow-md z-30 text-white shrink-0 no-select">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center overflow-hidden border border-white/30">
@@ -236,9 +346,20 @@ const App: React.FC = () => {
               {selectedSpecialist.name}
               <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
             </h1>
-            <p className="text-[11px] text-white/80 font-medium tracking-tight">
-              Sessão: {db.getGuestId().slice(0, 8)}
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-[11px] text-white/80 font-medium tracking-tight truncate max-w-[100px]">
+                {(user as any).is_local ? "Visitante (Local)" : ((user as any).is_anonymous ? "Visitante" : (user as any).email)}
+              </p>
+              <button 
+                onClick={() => {
+                  db.signOut();
+                  setUser(null);
+                }}
+                className="text-[9px] bg-black/20 hover:bg-black/40 px-1.5 py-0.5 rounded border border-white/10 transition-colors uppercase font-bold"
+              >
+                Sair
+              </button>
+            </div>
           </div>
         </div>
         
@@ -257,15 +378,18 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Área de Mensagens */}
-      <main 
-        ref={scrollRef} 
-        className="flex-grow overflow-y-auto p-4 space-y-2 custom-scrollbar"
+      <button 
+        onClick={handleClearChat}
+        className="absolute top-20 right-4 z-20 bg-white/80 backdrop-blur px-3 py-1 rounded-full text-[10px] font-bold text-red-500 shadow-sm border border-red-100 uppercase"
       >
+        Limpar Histórico
+      </button>
+
+      <main ref={scrollRef} className="flex-grow overflow-y-auto p-4 space-y-2 custom-scrollbar">
         {isHistoryLoading ? (
           <div className="flex flex-col items-center justify-center h-full gap-3 bg-white/40 backdrop-blur-sm rounded-3xl mx-8 my-12">
             <div className="w-8 h-8 border-3 border-[#075E54] border-t-transparent rounded-full animate-spin"></div>
-            <span className="text-[#075E54] text-[10px] font-black tracking-widest uppercase">Carregando Sessão...</span>
+            <span className="text-[#075E54] text-[10px] font-black tracking-widest uppercase">Restaurando Conversa...</span>
           </div>
         ) : (
           <>
@@ -273,13 +397,12 @@ const App: React.FC = () => {
               <ChatMessage key={msg.id} message={msg} specialistName={selectedSpecialist.name} avatar={selectedSpecialist.avatar} />
             ))}
             
-            {/* Feedback de Voz Transcrito */}
             {(liveTranscription.user || liveTranscription.model || isPressing) && (
               <div className="flex flex-col gap-2 p-3 bg-white/95 backdrop-blur rounded-2xl border border-gray-100 shadow-xl animate-in fade-in slide-in-from-bottom-4 sticky bottom-2 mx-1">
                 {isPressing && (
                   <div className="flex items-center gap-2 text-red-500 font-bold text-[10px] uppercase">
                     <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-                    Ouvindo agora...
+                    Ouvindo...
                   </div>
                 )}
                 {liveTranscription.user && (
@@ -302,10 +425,8 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* Footer PTT / Teclado */}
       <footer className="bg-[#F0F2F5] p-3 flex items-center gap-2 relative border-t border-gray-200 shrink-0">
         <div className="flex items-center w-full gap-2 px-1">
-          
           <button 
             onClick={toggleVoiceMode} 
             className={`p-3.5 rounded-full transition-all active:scale-90 ${isVoiceMode ? 'bg-[#075E54] text-white' : 'bg-white text-gray-500 border border-gray-200'}`}
@@ -325,7 +446,7 @@ const App: React.FC = () => {
                 {isPressing ? (
                   <div className="flex items-center gap-3 animate-pulse">
                     <span className="text-red-600 font-bold text-lg tabular-nums">{formatTime(recordingTime)}</span>
-                    <span className="text-gray-400 text-sm italic">Gravando áudio...</span>
+                    <span className="text-gray-400 text-sm italic">Gravando...</span>
                   </div>
                 ) : (
                   <div className="w-full text-center text-gray-400 text-xs font-bold uppercase tracking-widest">

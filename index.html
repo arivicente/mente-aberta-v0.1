@@ -9,6 +9,16 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+      // Shim para evitar o erro "process is not defined" em produção (GitHub Pages)
+      window.process = {
+        env: {
+          NODE_ENV: 'production',
+          // A chave é injetada pelo ambiente, mas definimos o objeto para evitar crash
+          API_KEY: '' 
+        }
+      };
+    </script>
     <style>
         body {
             font-family: 'Inter', sans-serif;
@@ -63,5 +73,7 @@
 </head>
 <body>
     <div id="root"></div>
+    <!-- Script de entrada necessário para carregar o app -->
+    <script type="module" src="index.tsx"></script>
 </body>
 </html>

@@ -2,7 +2,14 @@
 import { GoogleGenAI } from "@google/genai";
 import { Message, Specialist } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+// Função para obter a chave de forma segura sem quebrar o carregamento inicial
+const getApiKey = () => {
+  try {
+    return process.env.API_KEY || '';
+  } catch (e) {
+    return '';
+  }
+};
 
 export const getAIResponse = async (
   specialist: Specialist,
@@ -10,16 +17,19 @@ export const getAIResponse = async (
   userInput: string
 ): Promise<string> => {
   try {
-    // Current implementation uses Gemini as the primary provider
+    const apiKey = getApiKey();
+    if (!apiKey) {
+      return "Configuração pendente: A chave de API do Gemini não foi detectada.";
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
     const model = 'gemini-3-flash-preview';
     
-    // Format history for Gemini
     const contents = history.map(msg => ({
       role: msg.role === 'user' ? 'user' : 'model',
       parts: [{ text: msg.content }]
     }));
 
-    // Add current user input
     contents.push({
       role: 'user',
       parts: [{ text: userInput }]
