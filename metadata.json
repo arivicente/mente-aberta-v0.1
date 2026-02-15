@@ -1,0 +1,7 @@
+{
+  "name": "Mente Aberta - Chat Terapêutico v0.1",
+  "description": "Um MVP funcional de chat terapêutico com especialistas virtuais (Freud, Jung e Beck) focado em autoconhecimento e saúde mental.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
