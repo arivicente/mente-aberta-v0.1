@@ -5,20 +5,25 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Mente Aberta - Chat Terapêutico</title>
+    
+    <!-- Scripts Base -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
     <script>
-      // Shim para evitar o erro "process is not defined" em produção (GitHub Pages)
+      // Shim para evitar o erro "process is not defined" no navegador
       window.process = {
         env: {
           NODE_ENV: 'production',
-          // A chave é injetada pelo ambiente, mas definimos o objeto para evitar crash
-          API_KEY: '' 
+          API_KEY: '' // A chave é injetada automaticamente pelo ambiente seguro
         }
       };
     </script>
+
     <style>
         body {
             font-family: 'Inter', sans-serif;
@@ -59,21 +64,29 @@
             background-repeat: repeat;
         }
     </style>
-<script type="importmap">
+
+    <script type="importmap">
 {
   "imports": {
     "@google/genai": "https://esm.sh/@google/genai@^1.41.0",
     "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.48.1",
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "react": "https://esm.sh/react@^19.2.4",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/"
+    "react": "https://esm.sh/react@19.0.0",
+    "react-dom": "https://esm.sh/react-dom@19.0.0",
+    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
+    "react/": "https://esm.sh/react@^19.2.4/"
   }
 }
 </script>
 </head>
 <body>
     <div id="root"></div>
-    <!-- Script de entrada necessário para carregar o app -->
-    <script type="module" src="index.tsx"></script>
+
+    <!-- 
+      IMPORTANTE: 
+      Usamos type="text/babel" e data-type="module" para que o Babel Standalone 
+      converta o código TSX em JS moderno no momento que a página carregar.
+    -->
+    <script type="text/babel" data-type="module" data-presets="react,typescript" src="index.tsx"></script>
 </body>
 </html>
